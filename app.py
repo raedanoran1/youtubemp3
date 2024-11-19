@@ -276,4 +276,4 @@ def download(filename):
 if __name__ == '__main__':
     os.makedirs('static/downloads', exist_ok=True)
     cleanup_downloads()  # Başlangıçta eski dosyaları temizle
-    app.run(debug=True)
+    app.run(host='0.0.0.0', port=int(os.getenv('PORT', 8080)))
