@@ -10,6 +10,7 @@ from pydub import AudioSegment
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 import multiprocessing
+import tempfile
 
 # Yeni import
 import yt_dlp
@@ -20,6 +21,10 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 CORS(app)
+
+# Vercel için geçici dizin yolu
+TEMP_DIR = tempfile.gettempdir()
+DOWNLOAD_DIR = os.path.join(TEMP_DIR, 'downloads')
 
 # Temizleme işlemi için son indirme zamanını takip etmek için global değişken
 last_download_time = None
@@ -37,12 +42,11 @@ def parallel_cleanup_file(file_info):
 
 def cleanup_downloads():
     """24 saatten eski dosyaları paralel olarak temizle"""
-    download_path = 'static/downloads'
-    if os.path.exists(download_path):
+    if os.path.exists(DOWNLOAD_DIR):
         current_time = datetime.now()
         # Tüm dosya yollarını ve şu anki zamanı içeren tuple listesi oluştur
-        file_list = [(os.path.join(download_path, filename), current_time) 
-                    for filename in os.listdir(download_path)]
+        file_list = [(os.path.join(DOWNLOAD_DIR, filename), current_time) 
+                    for filename in os.listdir(DOWNLOAD_DIR)]
         
         # İşlemci sayısının yarısını kullan
         num_processes = max(1, multiprocessing.cpu_count() // 2)
@@ -145,7 +149,7 @@ def process_audio(info_dict, downloads_dir):
 def download_with_ytdlp(youtube_url, output_path):
     """yt-dlp ile video indirme ve işleme - paralel versiyon"""
     try:
-        downloads_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static', 'downloads')
+        downloads_dir = output_path
         os.makedirs(downloads_dir, exist_ok=True)
         
         safe_template = '%(title).50s_%(id)s.%(ext)s'
@@ -179,7 +183,7 @@ def download_with_ytdlp(youtube_url, output_path):
                 raise Exception("Dosya indirme işlemi başarısız oldu")
             
             logger.info(f"Dosya başarıyla indirildi ve işlendi: {final_path}")
-            return final_path
+            return {'filename': final_path}
             
     except Exception as e:
         logger.error(f"İndirme hatası: {str(e)}")
@@ -194,86 +198,61 @@ def index():
 def convert():
     try:
         data = request.get_json()
-        if not data:
-            logger.error("JSON verisi alınamadı")
-            return jsonify({'error': 'JSON verisi gerekli'}), 400
+        if not data or 'url' not in data:
+            return jsonify({'error': 'URL gerekli'}), 400
 
-        youtube_url = data.get('youtube_url')
-        logger.info(f"Gelen YouTube URL: {youtube_url}")
-
-        if not youtube_url:
-            logger.error("YouTube URL eksik")
-            return jsonify({'error': 'YouTube URL gerekli'}), 400
-
+        youtube_url = data['url']
+        
+        # YouTube URL'sini doğrula
         if not validate_youtube_url(youtube_url):
-            logger.error(f"Geçersiz YouTube URL: {youtube_url}")
-            return jsonify({'error': 'Geçersiz YouTube URL formatı'}), 400
+            return jsonify({'error': 'Geçersiz YouTube URL\'si'}), 400
 
-        # Temizleme işlemini kontrol et
-        cleanup_downloads()
+        # Geçici dizini oluştur
+        os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
         try:
-            # Download with yt-dlp and get the file path
-            logger.info(f"Video indirme başlıyor: {youtube_url}")
-            downloaded_file = download_with_ytdlp(youtube_url, 'static/downloads')
-            
-            if not os.path.exists(downloaded_file):
-                logger.error(f"İndirilen dosya bulunamadı: {downloaded_file}")
-                return jsonify({'error': 'Dosya indirme işlemi başarısız oldu'}), 500
-
-            # Get just the filename from the path
-            filename = os.path.basename(downloaded_file)
-            logger.info(f"Dönüştürme başarılı. Dosya: {filename}")
-            
-            return jsonify({
-                'success': True,
-                'message': 'Dönüştürme başarılı',
-                'filename': filename
-            })
-
+            # yt-dlp ile video indir ve işle
+            info = download_with_ytdlp(youtube_url, DOWNLOAD_DIR)
+            if info and 'filename' in info:
+                return jsonify({'filename': os.path.basename(info['filename'])})
+            else:
+                return jsonify({'error': 'Video indirme başarısız'}), 500
         except Exception as e:
-            error_msg = f"Dönüştürme hatası: {str(e)}"
-            logger.error(error_msg)
-            logger.error(traceback.format_exc())
-            return jsonify({'error': error_msg}), 500
+            logger.error(f"Video indirme/işleme hatası: {str(e)}")
+            return jsonify({'error': f'Video işleme hatası: {str(e)}'}), 500
 
     except Exception as e:
-        error_msg = f"Genel hata: {str(e)}"
-        logger.error(error_msg)
-        logger.error(traceback.format_exc())
-        return jsonify({'error': error_msg}), 500
+        logger.error(f"Genel hata: {str(e)}\n{traceback.format_exc()}")
+        return jsonify({'error': f'İşlem hatası: {str(e)}'}), 500
 
 @app.route('/download/<filename>')
 def download(filename):
     try:
-        # Güvenlik kontrolü: filename'den zararlı karakterleri temizle
-        filename = os.path.basename(filename)
-        file_path = os.path.join('static', 'downloads', filename)
+        # Güvenlik kontrolü - dosya adında tehlikeli karakterler var mı?
+        if '..' in filename or filename.startswith('/'):
+            return jsonify({'error': 'Geçersiz dosya adı'}), 400
 
+        file_path = os.path.join(DOWNLOAD_DIR, filename)
+        
+        # Dosya var mı kontrol et
         if not os.path.exists(file_path):
-            logger.error(f"Dosya bulunamadı: {file_path}")
-            return jsonify({
-                'error': 'Dosya bulunamadı. Lütfen önce dönüştürme işlemini yapın.',
-                'file_path': file_path,
-                'exists': False
-            }), 404
+            return jsonify({'error': 'Dosya bulunamadı'}), 404
 
         try:
             return send_file(
                 file_path,
                 as_attachment=True,
-                download_name=filename,
-                mimetype='audio/mpeg'
+                download_name=filename
             )
         except Exception as e:
             logger.error(f"Dosya gönderme hatası: {str(e)}")
-            return jsonify({'error': 'Dosya gönderme hatası'}), 500
+            return jsonify({'error': f'Dosya gönderme hatası: {str(e)}'}), 500
 
     except Exception as e:
-        logger.error(f"Download hatası: {str(e)}")
+        logger.error(f"Dosya indirme hatası: {str(e)}")
         return jsonify({'error': f'Dosya indirme hatası: {str(e)}'}), 500
 
 if __name__ == '__main__':
-    os.makedirs('static/downloads', exist_ok=True)
+    os.makedirs(DOWNLOAD_DIR, exist_ok=True)
     cleanup_downloads()  # Başlangıçta eski dosyaları temizle
     app.run(host='0.0.0.0', port=int(os.getenv('PORT', 8080)))
