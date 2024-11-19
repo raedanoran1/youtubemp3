@@ -5,3 +5,5 @@ moviepy==1.0.3
 pydub==0.25.1
 gunicorn==21.2.0
 numpy>=1.22.0
+google-api-python-client==2.108.0
+python-dotenv==1.0.0

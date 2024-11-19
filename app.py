@@ -11,9 +11,15 @@ import numpy as np
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 import multiprocessing
 import tempfile
-
-# Yeni import
 import yt_dlp
+import re
+import json
+from dotenv import load_dotenv
+from googleapiclient.discovery import build
+from urllib.parse import urlparse, parse_qs
+
+# .env dosyasını yükle
+load_dotenv()
 
 # Logging ayarları
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s: %(message)s')
@@ -108,16 +114,63 @@ def convert_to_432hz(input_path, output_path):
         logger.error(f"432 Hz dönüşüm hatası: {str(e)}")
         return False
 
+def extract_video_id(url):
+    """YouTube URL'sinden video ID'sini çıkarır"""
+    parsed_url = urlparse(url)
+    if parsed_url.hostname in ['www.youtube.com', 'youtube.com']:
+        if parsed_url.path == '/watch':
+            return parse_qs(parsed_url.query)['v'][0]
+        elif parsed_url.path.startswith('/embed/'):
+            return parsed_url.path.split('/')[2]
+        elif parsed_url.path.startswith('/v/'):
+            return parsed_url.path.split('/')[2]
+    elif parsed_url.hostname in ['youtu.be']:
+        return parsed_url.path[1:]
+    return None
+
+def get_video_info(video_id):
+    """YouTube API kullanarak video bilgilerini alır"""
+    try:
+        YOUTUBE_API_KEY = os.getenv('YOUTUBE_API_KEY')
+        youtube = build('youtube', 'v3', developerKey=YOUTUBE_API_KEY)
+        
+        request = youtube.videos().list(
+            part="snippet,contentDetails",
+            id=video_id
+        )
+        response = request.execute()
+        
+        if not response['items']:
+            raise Exception("Video bulunamadı veya erişilemez")
+            
+        video_info = response['items'][0]
+        return {
+            'title': video_info['snippet']['title'],
+            'duration': video_info['contentDetails']['duration'],
+            'description': video_info['snippet']['description']
+        }
+    except Exception as e:
+        logger.error(f"Video bilgileri alınamadı: {str(e)}")
+        raise
+
 def download_with_ytdlp(youtube_url, output_path):
     """yt-dlp ile video indirme ve işleme"""
     try:
+        # Video ID'sini al ve bilgileri kontrol et
+        video_id = extract_video_id(youtube_url)
+        if not video_id:
+            raise Exception("Geçersiz YouTube URL'si")
+            
+        video_info = get_video_info(video_id)
+        logger.info(f"Video bilgileri alındı: {video_info['title']}")
+        
         downloads_dir = output_path
         os.makedirs(downloads_dir, exist_ok=True)
         
-        safe_template = '%(title).50s_%(id)s.%(ext)s'
-        filename_template = os.path.join(downloads_dir, safe_template)
+        safe_title = re.sub(r'[^\w\s-]', '', video_info['title'])
+        safe_filename = f"{safe_title}_{video_id}"
+        filename_template = os.path.join(downloads_dir, safe_filename + '.%(ext)s')
 
-        # Temel yapılandırma
         ydl_opts = {
             'format': 'bestaudio/best',
             'postprocessors': [{
@@ -142,12 +195,8 @@ def download_with_ytdlp(youtube_url, output_path):
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
                 'Accept-Language': 'en-US,en;q=0.5',
-                'Connection': 'keep-alive',
-                'Upgrade-Insecure-Requests': '1',
-                'Sec-Fetch-Dest': 'document',
-                'Sec-Fetch-Mode': 'navigate',
-                'Sec-Fetch-Site': 'none',
-                'Sec-Fetch-User': '?1',
+                'Referer': 'https://www.youtube.com/',
+                'Origin': 'https://www.youtube.com',
             },
             'extractor_args': {
                 'youtube': {
@@ -157,65 +206,20 @@ def download_with_ytdlp(youtube_url, output_path):
             }
         }
 
-        # İndirme seçenekleri listesi
-        download_options = [
-            {'format': 'bestaudio/best'},  # Varsayılan format
-            {'format': 'bestaudio[ext=m4a]/bestaudio'},  # m4a formatını dene
-            {'format': 'worstaudio/worst'},  # Düşük kalite dene
-            {'format': '140/bestaudio[ext=m4a]/bestaudio'}  # Spesifik format ID'si
-        ]
-
-        last_error = None
-        for option in download_options:
-            try:
-                # Mevcut seçeneği yapılandırmaya ekle
-                current_opts = ydl_opts.copy()
-                current_opts.update(option)
-                
-                with yt_dlp.YoutubeDL(current_opts) as ydl:
-                    logger.info(f"Video indirme deneniyor: {youtube_url} - Format: {option['format']}")
-                    return download_and_process_video(ydl, youtube_url)
-                    
-            except Exception as e:
-                last_error = e
-                logger.error(f"İndirme başarısız oldu format ile: {option['format']} - Hata: {str(e)}")
-                continue
-        
-        if last_error:
-            raise Exception(f"Tüm indirme denemeleri başarısız oldu. Son hata: {str(last_error)}")
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            logger.info(f"Video indirme başlıyor: {youtube_url}")
+            ydl.download([youtube_url])
             
+            # İndirilen dosyayı bul
+            mp3_filename = os.path.join(downloads_dir, safe_filename + '.mp3')
+            if not os.path.exists(mp3_filename):
+                raise Exception("Dosya indirme işlemi başarısız oldu")
+            
+            logger.info(f"Dosya başarıyla indirildi: {mp3_filename}")
+            return {'filename': os.path.basename(mp3_filename)}
+
     except Exception as e:
         logger.error(f"İndirme hatası: {str(e)}")
-        logger.error(f"Tam hata: {traceback.format_exc()}")
-        raise e
-
-def download_and_process_video(ydl, youtube_url):
-    """Video indirme ve işleme fonksiyonu"""
-    try:
-        # Video bilgilerini al
-        logger.info(f"Video indirme başlıyor: {youtube_url}")
-        info_dict = ydl.extract_info(youtube_url, download=True)
-        
-        if info_dict is None:
-            raise Exception("Video bilgileri alınamadı")
-        
-        video_title = info_dict.get('title', 'video')
-        video_id = info_dict.get('id', '')
-        
-        logger.info(f"Video bilgileri alındı: {video_title} ({video_id})")
-        
-        # İndirilen dosyanın tam yolunu bul
-        final_path = ydl.prepare_filename(info_dict)
-        final_path = os.path.splitext(final_path)[0] + '.mp3'  # .mp3 uzantısını ekle
-
-        if not os.path.exists(final_path):
-            raise Exception("Dosya indirme işlemi başarısız oldu")
-        
-        logger.info(f"Dosya başarıyla indirildi ve işlendi: {final_path}")
-        return {'filename': os.path.basename(final_path)}
-
-    except Exception as e:
-        logger.error(f"Video indirme hatası: {str(e)}")
         logger.error(f"Tam hata: {traceback.format_exc()}")
         raise Exception(f"Video indirme hatası: {str(e)}")
 
