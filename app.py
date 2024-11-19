@@ -118,7 +118,7 @@ def download_with_ytdlp(youtube_url, output_path):
         filename_template = os.path.join(downloads_dir, safe_template)
         
         ydl_opts = {
-            'format': 'bestaudio/best',
+            'format': 'bestaudio[ext=m4a]/bestaudio/best',
             'postprocessors': [{
                 'key': 'FFmpegExtractAudio',
                 'preferredcodec': 'mp3',
@@ -129,17 +129,22 @@ def download_with_ytdlp(youtube_url, output_path):
             'no_warnings': False,
             'extract_flat': False,
             'cookiefile': None,
-            # Bot korumasını aşmak için ek ayarlar
+            'nocheckcertificate': True,
+            'ignoreerrors': False,
+            'logtostderr': False,
+            'geo_bypass': True,
+            'extractor_retries': 3,
             'http_headers': {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                'Accept-Language': 'en-us,en;q=0.5',
-                'Sec-Fetch-Mode': 'navigate',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.5',
+                'Connection': 'keep-alive',
             },
+            'socket_timeout': 30,
             'extractor_args': {
                 'youtube': {
-                    'player_client': ['android'],
-                    'player_skip': ['webpage', 'config'],
+                    'player_client': ['android', 'web'],
+                    'player_skip': ['webpage', 'config', 'js'],
                 }
             }
         }
@@ -147,6 +152,7 @@ def download_with_ytdlp(youtube_url, output_path):
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             try:
                 # Video bilgilerini al
+                logger.info(f"Video indirme başlıyor: {youtube_url}")
                 info_dict = ydl.extract_info(youtube_url, download=True)
                 
                 if info_dict is None:
@@ -155,23 +161,26 @@ def download_with_ytdlp(youtube_url, output_path):
                 video_title = info_dict.get('title', 'video')
                 video_id = info_dict.get('id', '')
                 
+                logger.info(f"Video bilgileri alındı: {video_title} ({video_id})")
+                
                 # İndirilen dosyanın tam yolunu bul
                 final_path = ydl.prepare_filename(info_dict)
                 final_path = os.path.splitext(final_path)[0] + '.mp3'  # .mp3 uzantısını ekle
 
+                if not os.path.exists(final_path):
+                    raise Exception("Dosya indirme işlemi başarısız oldu")
+                
+                logger.info(f"Dosya başarıyla indirildi ve işlendi: {final_path}")
+                return {'filename': os.path.basename(final_path)}
+
             except Exception as e:
                 logger.error(f"Video indirme hatası: {str(e)}")
+                logger.error(f"Tam hata: {traceback.format_exc()}")
                 raise Exception(f"Video indirme hatası: {str(e)}")
-
-            if not os.path.exists(final_path):
-                raise Exception("Dosya indirme işlemi başarısız oldu")
-            
-            logger.info(f"Dosya başarıyla indirildi ve işlendi: {final_path}")
-            return {'filename': final_path}
             
     except Exception as e:
         logger.error(f"İndirme hatası: {str(e)}")
-        traceback.print_exc()
+        logger.error(f"Tam hata: {traceback.format_exc()}")
         raise e
 
 def process_audio(info_dict, downloads_dir):
