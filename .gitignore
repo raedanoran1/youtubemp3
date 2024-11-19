@@ -1,0 +1,20 @@
+# Geçici dosyalar ve dizinler
+static/downloads/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Sistem dosyaları
+.DS_Store
+Thumbs.db
+.env
+
+# IDE dosyaları
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Log dosyaları
+*.log

@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YouTube MP3 Dönüştürücü</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        .gradient-bg {
+            background: linear-gradient(135deg, #ff0844 0%, #ffb199 100%);
+        }
+        .loading {
+            display: none;
+        }
+        .loading.active {
+            display: flex;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen">
+    <div class="container mx-auto px-4 py-8">
+        <div class="max-w-3xl mx-auto">
+            <!-- Header -->
+            <div class="text-center mb-12">
+                <h1 class="text-4xl font-bold text-gray-800 mb-4">
+                    <i class="fab fa-youtube text-red-600 mr-2"></i>
+                    YouTube MP3 Dönüştürücü
+                </h1>
+                <p class="text-gray-600">YouTube videolarını kolayca MP3 formatına dönüştürün</p>
+            </div>
+
+            <!-- Input Form -->
+            <div class="bg-white rounded-lg shadow-lg p-6 mb-8">
+                <div class="flex flex-col md:flex-row gap-4">
+                    <input type="text" 
+                           id="youtubeUrl" 
+                           placeholder="YouTube URL'sini yapıştırın" 
+                           class="flex-1 px-4 py-3 rounded-lg border border-gray-300 focus:outline-none focus:border-red-500">
+                    <button onclick="convertToMp3()" 
+                            class="gradient-bg text-white px-8 py-3 rounded-lg hover:opacity-90 transition-opacity">
+                        Dönüştür
+                    </button>
+                </div>
+            </div>
+
+            <!-- Loading Indicator -->
+            <div id="loading" class="loading justify-center items-center space-x-2 mb-8">
+                <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-red-500"></div>
+                <span class="text-gray-600">Dönüştürülüyor...</span>
+            </div>
+
+            <!-- Result Card -->
+            <div id="result" class="hidden bg-white rounded-lg shadow-lg p-6">
+                <div class="flex flex-col md:flex-row items-center gap-6">
+                    <img id="thumbnail" class="w-48 h-48 object-cover rounded-lg" src="" alt="Video thumbnail">
+                    <div class="flex-1">
+                        <h3 id="videoTitle" class="text-xl font-semibold text-gray-800 mb-2"></h3>
+                        <p id="videoAuthor" class="text-gray-600 mb-4"></p>
+                        <a id="downloadBtn" 
+                           href="#" 
+                           class="gradient-bg text-white px-6 py-3 rounded-lg inline-flex items-center hover:opacity-90 transition-opacity">
+                            <i class="fas fa-download mr-2"></i>
+                            MP3 İndir
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function validateYouTubeUrl(url) {
+            const pattern = /^(https?:\/\/)?(www\.)?(youtube\.com\/watch\?v=|youtu\.be\/)[a-zA-Z0-9_-]{11}$/;
+            return pattern.test(url);
+        }
+
+        function showError(message) {
+            const errorDiv = document.createElement('div');
+            errorDiv.className = 'bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative mb-4';
+            errorDiv.innerHTML = message;
+            document.querySelector('.max-w-3xl').insertBefore(errorDiv, document.getElementById('loading'));
+            setTimeout(() => errorDiv.remove(), 5000);
+        }
+
+        async function convertToMp3() {
+            const url = document.getElementById('youtubeUrl').value.trim();
+            if (!url) {
+                showError('Lütfen bir YouTube URL\'si girin');
+                return;
+            }
+
+            if (!validateYouTubeUrl(url)) {
+                showError('Geçersiz YouTube URL\'si. Lütfen geçerli bir YouTube video URL\'si girin');
+                return;
+            }
+
+            // UI güncelleme
+            document.getElementById('loading').classList.add('active');
+            document.getElementById('result').classList.add('hidden');
+
+            try {
+                const response = await fetch('/convert', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ youtube_url: url })
+                });
+
+                const data = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(data.error || 'Dönüştürme işlemi başarısız oldu');
+                }
+
+                // Sonuçları göster
+                document.getElementById('result').classList.remove('hidden');
+                document.getElementById('downloadBtn').href = `/download/${encodeURIComponent(data.filename)}`;
+                
+                // Video başlığını filename'den al (uzantıyı kaldırarak)
+                const videoTitle = data.filename.replace('.mp3', '');
+                document.getElementById('videoTitle').textContent = videoTitle;
+                
+                // Thumbnail ve author bilgilerini gizle çünkü backend'den gelmiyor
+                document.getElementById('thumbnail').style.display = 'none';
+                document.getElementById('videoAuthor').style.display = 'none';
+            } catch (error) {
+                showError(error.message);
+            } finally {
+                document.getElementById('loading').classList.remove('active');
+            }
+        }
+    </script>
+</body>
+</html>
