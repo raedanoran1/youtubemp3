@@ -109,16 +109,17 @@ def convert_to_432hz(input_path, output_path):
         return False
 
 def download_with_ytdlp(youtube_url, output_path):
-    """yt-dlp ile video indirme ve işleme - paralel versiyon"""
+    """yt-dlp ile video indirme ve işleme"""
     try:
         downloads_dir = output_path
         os.makedirs(downloads_dir, exist_ok=True)
         
         safe_template = '%(title).50s_%(id)s.%(ext)s'
         filename_template = os.path.join(downloads_dir, safe_template)
-        
+
+        # Temel yapılandırma
         ydl_opts = {
-            'format': 'bestaudio[ext=m4a]/bestaudio/best',
+            'format': 'bestaudio/best',
             'postprocessors': [{
                 'key': 'FFmpegExtractAudio',
                 'preferredcodec': 'mp3',
@@ -126,21 +127,28 @@ def download_with_ytdlp(youtube_url, output_path):
             }],
             'outtmpl': filename_template,
             'quiet': False,
+            'verbose': True,
             'no_warnings': False,
             'extract_flat': False,
             'nocheckcertificate': True,
             'ignoreerrors': False,
             'logtostderr': False,
             'geo_bypass': True,
-            'extractor_retries': 3,
-            'cookies_from_browser': ['chrome', 'edge', 'firefox', 'opera', 'safari', 'chromium'],
+            'extractor_retries': 5,
+            'fragment_retries': 10,
+            'retry_sleep_functions': {'http': lambda n: 5},
+            'socket_timeout': 60,
             'http_headers': {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
                 'Accept-Language': 'en-US,en;q=0.5',
                 'Connection': 'keep-alive',
+                'Upgrade-Insecure-Requests': '1',
+                'Sec-Fetch-Dest': 'document',
+                'Sec-Fetch-Mode': 'navigate',
+                'Sec-Fetch-Site': 'none',
+                'Sec-Fetch-User': '?1',
             },
-            'socket_timeout': 30,
             'extractor_args': {
                 'youtube': {
                     'player_client': ['android', 'web'],
@@ -149,32 +157,32 @@ def download_with_ytdlp(youtube_url, output_path):
             }
         }
 
-        try:
-            # Önce Chrome çerezlerini dene
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                logger.info(f"Chrome çerezleri ile video indirme deneniyor: {youtube_url}")
-                return download_and_process_video(ydl, youtube_url)
-        except Exception as chrome_error:
-            logger.error(f"Chrome çerezleri ile indirme başarısız: {str(chrome_error)}")
-            
+        # İndirme seçenekleri listesi
+        download_options = [
+            {'format': 'bestaudio/best'},  # Varsayılan format
+            {'format': 'bestaudio[ext=m4a]/bestaudio'},  # m4a formatını dene
+            {'format': 'worstaudio/worst'},  # Düşük kalite dene
+            {'format': '140/bestaudio[ext=m4a]/bestaudio'}  # Spesifik format ID'si
+        ]
+
+        last_error = None
+        for option in download_options:
             try:
-                # Chrome başarısız olursa Edge çerezlerini dene
-                ydl_opts['cookies_from_browser'] = ['edge']
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    logger.info(f"Edge çerezleri ile video indirme deneniyor: {youtube_url}")
-                    return download_and_process_video(ydl, youtube_url)
-            except Exception as edge_error:
-                logger.error(f"Edge çerezleri ile indirme başarısız: {str(edge_error)}")
+                # Mevcut seçeneği yapılandırmaya ekle
+                current_opts = ydl_opts.copy()
+                current_opts.update(option)
                 
-                try:
-                    # Edge başarısız olursa Firefox çerezlerini dene
-                    ydl_opts['cookies_from_browser'] = ['firefox']
-                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                        logger.info(f"Firefox çerezleri ile video indirme deneniyor: {youtube_url}")
-                        return download_and_process_video(ydl, youtube_url)
-                except Exception as firefox_error:
-                    logger.error(f"Firefox çerezleri ile indirme başarısız: {str(firefox_error)}")
-                    raise Exception("Tüm tarayıcı çerezleri ile indirme başarısız oldu")
+                with yt_dlp.YoutubeDL(current_opts) as ydl:
+                    logger.info(f"Video indirme deneniyor: {youtube_url} - Format: {option['format']}")
+                    return download_and_process_video(ydl, youtube_url)
+                    
+            except Exception as e:
+                last_error = e
+                logger.error(f"İndirme başarısız oldu format ile: {option['format']} - Hata: {str(e)}")
+                continue
+        
+        if last_error:
+            raise Exception(f"Tüm indirme denemeleri başarısız oldu. Son hata: {str(last_error)}")
             
     except Exception as e:
         logger.error(f"İndirme hatası: {str(e)}")
