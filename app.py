@@ -5,12 +5,7 @@ import traceback
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 import yt_dlp
-import requests
-from dotenv import load_dotenv
 from urllib.parse import urlparse, parse_qs
-
-# .env dosyasını yükle
-load_dotenv()
 
 # Logging yapılandırması
 logging.basicConfig(level=logging.INFO)
@@ -24,70 +19,31 @@ def extract_video_id(url):
     parsed_url = urlparse(url)
     if parsed_url.hostname in ['www.youtube.com', 'youtube.com']:
         if parsed_url.path == '/watch':
-            return parse_qs(parsed_url.query)['v'][0]
-        elif parsed_url.path.startswith('/embed/'):
+            return parse_qs(parsed_url.query).get('v', [None])[0]
+        elif parsed_url.path.startswith(('/embed/', '/v/')):
             return parsed_url.path.split('/')[2]
-        elif parsed_url.path.startswith('/v/'):
-            return parsed_url.path.split('/')[2]
-    elif parsed_url.hostname in ['youtu.be']:
+    elif parsed_url.hostname == 'youtu.be':
         return parsed_url.path[1:]
     return None
-
-def get_video_info(video_id):
-    """YouTube video bilgilerini API ile al"""
-    try:
-        api_key = os.getenv('YOUTUBE_API_KEY')
-        url = f"https://www.googleapis.com/youtube/v3/videos?part=snippet&id={video_id}&key={api_key}"
-        response = requests.get(url)
-        data = response.json()
-        
-        if not data.get('items'):
-            raise Exception("Video bulunamadı veya erişilemez")
-            
-        video_info = data['items'][0]['snippet']
-        return {
-            'title': video_info['title'],
-            'description': video_info.get('description', '')
-        }
-    except Exception as e:
-        logger.error(f"Video bilgileri alınamadı: {str(e)}")
-        raise
 
 def download_with_ytdlp(youtube_url, output_path):
     """yt-dlp ile video indirme"""
     try:
-        # Video ID'sini al ve bilgileri kontrol et
+        # Video ID'sini kontrol et
         video_id = extract_video_id(youtube_url)
         if not video_id:
             raise Exception("Geçersiz YouTube URL'si")
-            
-        video_info = get_video_info(video_id)
-        logger.info(f"Video bilgileri alındı: {video_info['title']}")
-        
+
         downloads_dir = output_path
         os.makedirs(downloads_dir, exist_ok=True)
-        
-        safe_title = re.sub(r'[^\w\s-]', '', video_info['title'])
-        safe_filename = f"{safe_title}_{video_id}"
-        filename_template = os.path.join(downloads_dir, safe_filename + '.%(ext)s')
 
+        # Önce video bilgilerini al
         ydl_opts = {
-            'format': 'bestaudio/best',
-            'postprocessors': [{
-                'key': 'FFmpegExtractAudio',
-                'preferredcodec': 'mp3',
-                'preferredquality': '192',
-            }],
-            'outtmpl': filename_template,
             'quiet': True,
             'no_warnings': True,
-            'extract_flat': False,
+            'extract_flat': True,
+            'force_generic_extractor': False,
             'nocheckcertificate': True,
-            'ignoreerrors': False,
-            'logtostderr': False,
-            'geo_bypass': True,
-            'extractor_retries': 3,
-            'socket_timeout': 30,
             'http_headers': {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -98,6 +54,50 @@ def download_with_ytdlp(youtube_url, output_path):
         }
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            try:
+                info = ydl.extract_info(youtube_url, download=False)
+                if not info:
+                    raise Exception("Video bilgileri alınamadı")
+                
+                video_title = info.get('title', 'video')
+                logger.info(f"Video bilgileri alındı: {video_title}")
+            except Exception as e:
+                logger.error(f"Video bilgileri alınamadı: {str(e)}")
+                raise Exception("Video bilgileri alınamadı")
+
+        # Güvenli dosya adı oluştur
+        safe_title = re.sub(r'[^\w\s-]', '', video_title)
+        safe_filename = f"{safe_title}_{video_id}"
+        filename_template = os.path.join(downloads_dir, safe_filename + '.%(ext)s')
+
+        # İndirme seçeneklerini ayarla
+        download_opts = {
+            'format': 'bestaudio/best',
+            'postprocessors': [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'mp3',
+                'preferredquality': '192',
+            }],
+            'outtmpl': filename_template,
+            'quiet': True,
+            'no_warnings': True,
+            'nocheckcertificate': True,
+            'geo_bypass': True,
+            'extractor_retries': 3,
+            'socket_timeout': 30,
+            'http_headers': {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.5',
+                'Referer': 'https://www.youtube.com/',
+                'Origin': 'https://www.youtube.com',
+            },
+            'youtube_include_dash_manifest': False,
+            'prefer_insecure': True,
+            'no_check_certificates': True
+        }
+
+        with yt_dlp.YoutubeDL(download_opts) as ydl:
             logger.info(f"Video indirme başlıyor: {youtube_url}")
             ydl.download([youtube_url])
             
