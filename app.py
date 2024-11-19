@@ -128,12 +128,12 @@ def download_with_ytdlp(youtube_url, output_path):
             'quiet': False,
             'no_warnings': False,
             'extract_flat': False,
-            'cookiefile': None,
             'nocheckcertificate': True,
             'ignoreerrors': False,
             'logtostderr': False,
             'geo_bypass': True,
             'extractor_retries': 3,
+            'cookies_from_browser': ['chrome', 'edge', 'firefox', 'opera', 'safari', 'chromium'],
             'http_headers': {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
@@ -149,39 +149,67 @@ def download_with_ytdlp(youtube_url, output_path):
             }
         }
 
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        try:
+            # Önce Chrome çerezlerini dene
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                logger.info(f"Chrome çerezleri ile video indirme deneniyor: {youtube_url}")
+                return download_and_process_video(ydl, youtube_url)
+        except Exception as chrome_error:
+            logger.error(f"Chrome çerezleri ile indirme başarısız: {str(chrome_error)}")
+            
             try:
-                # Video bilgilerini al
-                logger.info(f"Video indirme başlıyor: {youtube_url}")
-                info_dict = ydl.extract_info(youtube_url, download=True)
+                # Chrome başarısız olursa Edge çerezlerini dene
+                ydl_opts['cookies_from_browser'] = ['edge']
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    logger.info(f"Edge çerezleri ile video indirme deneniyor: {youtube_url}")
+                    return download_and_process_video(ydl, youtube_url)
+            except Exception as edge_error:
+                logger.error(f"Edge çerezleri ile indirme başarısız: {str(edge_error)}")
                 
-                if info_dict is None:
-                    raise Exception("Video bilgileri alınamadı")
-                
-                video_title = info_dict.get('title', 'video')
-                video_id = info_dict.get('id', '')
-                
-                logger.info(f"Video bilgileri alındı: {video_title} ({video_id})")
-                
-                # İndirilen dosyanın tam yolunu bul
-                final_path = ydl.prepare_filename(info_dict)
-                final_path = os.path.splitext(final_path)[0] + '.mp3'  # .mp3 uzantısını ekle
-
-                if not os.path.exists(final_path):
-                    raise Exception("Dosya indirme işlemi başarısız oldu")
-                
-                logger.info(f"Dosya başarıyla indirildi ve işlendi: {final_path}")
-                return {'filename': os.path.basename(final_path)}
-
-            except Exception as e:
-                logger.error(f"Video indirme hatası: {str(e)}")
-                logger.error(f"Tam hata: {traceback.format_exc()}")
-                raise Exception(f"Video indirme hatası: {str(e)}")
+                try:
+                    # Edge başarısız olursa Firefox çerezlerini dene
+                    ydl_opts['cookies_from_browser'] = ['firefox']
+                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                        logger.info(f"Firefox çerezleri ile video indirme deneniyor: {youtube_url}")
+                        return download_and_process_video(ydl, youtube_url)
+                except Exception as firefox_error:
+                    logger.error(f"Firefox çerezleri ile indirme başarısız: {str(firefox_error)}")
+                    raise Exception("Tüm tarayıcı çerezleri ile indirme başarısız oldu")
             
     except Exception as e:
         logger.error(f"İndirme hatası: {str(e)}")
         logger.error(f"Tam hata: {traceback.format_exc()}")
         raise e
+
+def download_and_process_video(ydl, youtube_url):
+    """Video indirme ve işleme fonksiyonu"""
+    try:
+        # Video bilgilerini al
+        logger.info(f"Video indirme başlıyor: {youtube_url}")
+        info_dict = ydl.extract_info(youtube_url, download=True)
+        
+        if info_dict is None:
+            raise Exception("Video bilgileri alınamadı")
+        
+        video_title = info_dict.get('title', 'video')
+        video_id = info_dict.get('id', '')
+        
+        logger.info(f"Video bilgileri alındı: {video_title} ({video_id})")
+        
+        # İndirilen dosyanın tam yolunu bul
+        final_path = ydl.prepare_filename(info_dict)
+        final_path = os.path.splitext(final_path)[0] + '.mp3'  # .mp3 uzantısını ekle
+
+        if not os.path.exists(final_path):
+            raise Exception("Dosya indirme işlemi başarısız oldu")
+        
+        logger.info(f"Dosya başarıyla indirildi ve işlendi: {final_path}")
+        return {'filename': os.path.basename(final_path)}
+
+    except Exception as e:
+        logger.error(f"Video indirme hatası: {str(e)}")
+        logger.error(f"Tam hata: {traceback.format_exc()}")
+        raise Exception(f"Video indirme hatası: {str(e)}")
 
 def process_audio(info_dict, downloads_dir):
     """İndirilen sesi işle ve 432 Hz'e dönüştür"""
