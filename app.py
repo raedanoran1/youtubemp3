@@ -108,11 +108,71 @@ def convert_to_432hz(input_path, output_path):
         logger.error(f"432 Hz dönüşüm hatası: {str(e)}")
         return False
 
-def download_audio(youtube_url, downloads_dir, ydl_opts):
-    """Ses indirme işlemi"""
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info_dict = ydl.extract_info(youtube_url, download=True)
-        return info_dict
+def download_with_ytdlp(youtube_url, output_path):
+    """yt-dlp ile video indirme ve işleme - paralel versiyon"""
+    try:
+        downloads_dir = output_path
+        os.makedirs(downloads_dir, exist_ok=True)
+        
+        safe_template = '%(title).50s_%(id)s.%(ext)s'
+        filename_template = os.path.join(downloads_dir, safe_template)
+        
+        ydl_opts = {
+            'format': 'bestaudio/best',
+            'postprocessors': [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'mp3',
+                'preferredquality': '192',
+            }],
+            'outtmpl': filename_template,
+            'quiet': False,
+            'no_warnings': False,
+            'extract_flat': False,
+            'cookiefile': None,
+            # Bot korumasını aşmak için ek ayarlar
+            'http_headers': {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Accept-Language': 'en-us,en;q=0.5',
+                'Sec-Fetch-Mode': 'navigate',
+            },
+            'extractor_args': {
+                'youtube': {
+                    'player_client': ['android'],
+                    'player_skip': ['webpage', 'config'],
+                }
+            }
+        }
+
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            try:
+                # Video bilgilerini al
+                info_dict = ydl.extract_info(youtube_url, download=True)
+                
+                if info_dict is None:
+                    raise Exception("Video bilgileri alınamadı")
+                
+                video_title = info_dict.get('title', 'video')
+                video_id = info_dict.get('id', '')
+                
+                # İndirilen dosyanın tam yolunu bul
+                final_path = ydl.prepare_filename(info_dict)
+                final_path = os.path.splitext(final_path)[0] + '.mp3'  # .mp3 uzantısını ekle
+
+            except Exception as e:
+                logger.error(f"Video indirme hatası: {str(e)}")
+                raise Exception(f"Video indirme hatası: {str(e)}")
+
+            if not os.path.exists(final_path):
+                raise Exception("Dosya indirme işlemi başarısız oldu")
+            
+            logger.info(f"Dosya başarıyla indirildi ve işlendi: {final_path}")
+            return {'filename': final_path}
+            
+    except Exception as e:
+        logger.error(f"İndirme hatası: {str(e)}")
+        traceback.print_exc()
+        raise e
 
 def process_audio(info_dict, downloads_dir):
     """İndirilen sesi işle ve 432 Hz'e dönüştür"""
@@ -145,50 +205,6 @@ def process_audio(info_dict, downloads_dir):
         os.remove(final_path)
         return hz432_path
     return final_path
-
-def download_with_ytdlp(youtube_url, output_path):
-    """yt-dlp ile video indirme ve işleme - paralel versiyon"""
-    try:
-        downloads_dir = output_path
-        os.makedirs(downloads_dir, exist_ok=True)
-        
-        safe_template = '%(title).50s_%(id)s.%(ext)s'
-        filename_template = os.path.join(downloads_dir, safe_template)
-        
-        ydl_opts = {
-            'format': 'bestaudio/best',
-            'postprocessors': [{
-                'key': 'FFmpegExtractAudio',
-                'preferredcodec': 'mp3',
-                'preferredquality': '192',
-            }],
-            'outtmpl': filename_template,
-            'prefer_ffmpeg': True,
-            'keepvideo': False,
-            'quiet': False,
-            'no_warnings': False
-        }
-
-        # ThreadPoolExecutor kullanarak indirme ve işleme işlemlerini paralel yap
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            # İndirme işlemini başlat
-            future_download = executor.submit(download_audio, youtube_url, downloads_dir, ydl_opts)
-            info_dict = future_download.result()
-            
-            # Ses işleme işlemini başlat
-            future_process = executor.submit(process_audio, info_dict, downloads_dir)
-            final_path = future_process.result()
-
-            if not os.path.exists(final_path):
-                raise Exception("Dosya indirme işlemi başarısız oldu")
-            
-            logger.info(f"Dosya başarıyla indirildi ve işlendi: {final_path}")
-            return {'filename': final_path}
-            
-    except Exception as e:
-        logger.error(f"İndirme hatası: {str(e)}")
-        traceback.print_exc()
-        raise e
 
 @app.route('/')
 def index():
